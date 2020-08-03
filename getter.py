@@ -81,7 +81,7 @@ target_group_too_vague_and_painful = soup.find_all('script')
 
 for i in target_group_too_vague_and_painful:
 	try:
-		if 'MusicComposition' in re.findall(regex_page_type, str(i)) # the <script> we want is the score information, that part contains that string right there
+		if 'MusicComposition' in re.findall(regex_page_type, str(i)): # the <script> we want is the score information, that part contains that string right there
 										# the others dont
 			target = str(i)
 	except:
