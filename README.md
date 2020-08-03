@@ -12,3 +12,5 @@ pip install pypdf2
 pip install img2pdf
 
 pip install bs4
+
+i hope those guys at musescore won't patch this
