@@ -6,6 +6,9 @@ download pdf, mp3, midi for free because that is what shown to you. Some users a
 you also need these libraries
 
 pip install svglib
+
 pip install pypdf2
+
 pip install img2pdf
+
 pip install bs4
