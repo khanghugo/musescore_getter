@@ -1,156 +1,204 @@
 import requests
-import re
 from bs4 import BeautifulSoup
-import argparse
-import os
+import re
 from svglib.svglib import svg2rlg
-from reportlab.graphics import renderPDF, renderPM
+from reportlab.graphics import renderPDF
 from PyPDF2 import PdfFileMerger
 import img2pdf
-
-# pip install svglib
-# pip install pypdf2
-# pip install img2pdf
+import os
+import argparse
 
 
+class Parser:
+    def __init__(self, url):
+        self.url = url
+        self.site_request = self.get_request()
 
-# https://musescore.com/static/musescore/scoredata/gen/9/8/3/6087389/3efafd0eb10f19468d8f3d8f23931d77016b6a03/score_0.svg?no-cache=158703369
-regex_in_quote = '"([^"]*)"' # im not sure what kind of magic this is
+        # one is for the site, one is for the file
+        if "scoredata" not in self.url:
+            self.html_soup = self.parse()
+            self.score_general_info = self.find_score_general_info()
+            self.base_url = self.find_base_url()
+            self.score_info = self.find_score_file_info()
 
-regex_img_link = f'"thumbnailUrl": {regex_in_quote}'
-regex_name_ = '"name": "([^"]*)"'
-regex_page_type = '"@type": "([^"]*)"'
+        else:
+            self.content_disposition = self.find_content_disposition()
+            self.file_name = self.find_file_name()
+            self.file_content = self.site_request.content
 
-regex_pages_count = '"pages":([0-9]*)'
-regex_midi_file = f'"midi":{regex_in_quote}'
-regex_mp3_file = f'"mp3":{regex_in_quote}'
+    def get_request(self):
+        return requests.get(self.url)
 
-cwd = os.getcwd() # this could be unneeded
+    def parse(self):
+        return BeautifulSoup(self.site_request.text, 'html.parser')
 
-parser = argparse.ArgumentParser()
-parser.add_argument(action='store', dest='link', nargs='*')
-args = parser.parse_args()
+    def find_score_general_info(self):
+        return [str(elements) for elements in self.html_soup.find_all('script') if 'MusicComposition' in re.findall(
+            '"@type": "([^"]*)"', str(elements))][0]
+        # i am sure it will return only one item in this list, but all okay because there is only one item that match
 
-args.link = ' '.join(args.link)
-#args.link = 'https://musescore.com/user/28844194/scores/6077997'
+    def find_base_url(self):
+        return re.findall('"thumbnailUrl": "([^"]*)"',
+                          self.score_general_info)[0].replace("\\", '').split('score_')[0]
 
-user_input = args.link
+    def is_svg(self):
+        svg_link = self.html_soup.find('link', {'type': 'image/svg+xml'})['href'].split('?no-cache')[0]
+        if len(svg_link) == 0 or svg_link == \
+                "https://musescore.com/static/public/img/product_icons/musescore/favicon.svg":
+            return False
+        return True
 
-if not user_input:
-	user_input = input('Musescore score link: ')
+    def find_score_file_info(self):
+        name = re.findall('"name": "([^"]*)"', self.score_general_info)[0]
 
-def replace_number_for_page(l, page):
-	# https://musescore.com/static/musescore/scoredata/gen/9/8/3/6087389/3efafd0eb10f19468d8f3d8f23931d77016b6a03/score_0.svg
-	split_key = '/score_'
-	dot = '.'
+        if self.is_svg():
+            img = self.base_url + "score_0.svg"
+        else:
+            img = self.base_url + "score_0.png"
 
-	l_split = l.split(split_key)
-	l_split[1] = l_split[1].split(dot)
+        page_count = int(re.findall(
+            '"pages":([0-9]*)',
+            str(self.html_soup.find_all('div', {'class': 'js-store'})).replace('&quot;', '"'))[0]
+                         )  # this is a bit too much?
 
-	l_split[1][0] = str(page)
-	l_split[1] = dot.join(l_split[1])
+        midi = self.base_url + "score.mid"
+        mp3 = self.base_url + "score.mp3"
+        mxl = self.base_url + "score.mxl"
 
-	return split_key.join(l_split) 
+        # img is passed at the end so the downloadfile will exclude it later
+        return [name, page_count, midi, mxl, mp3, img]
 
-def remove_special_char(s):
-	return re.sub('[^A-Za-z0-9.]+', '_', s) # remove all the special characters except for `.` and replace them with `_`
+    def find_content_disposition(self):
+        return self.site_request.headers.get('content-disposition')
 
-def download_files(url, _name):
-	# https://musescore.com/static/musescore/scoredata/gen/9/8/3/6087389/3efafd0eb10f19468d8f3d8f23931d77016b6a03/score_0.svg
-	file = requests.get(url)
-	# this will save the last bit of the directory and replace it with `_name` because if you run this multiple times, I am sure other files will be rewritten
-	file_name = url.split(r'/')[-1].replace('score', _name)
-	
-	# there is no needs for remove_...() but idk to be sure I guess?
-	directory = fr'{cwd}\{remove_special_char(file_name)}'
-	open(directory, 'wb+').write(file.content)
-	
-	# this return will be needed to indentify the downloaded files. i don't want to use `global`
-	return directory
+    def find_file_name(self):
+        if self.content_disposition:
+            # there is a weird inconsistency in the headers.
+            # all of the time, it is `filename="something"` but sometimes there is no quotation marks
+            return re.findall('(?<=filename=).*', self.content_disposition)[0].replace('"', '')
+        else:
+            # for some reasons, svg doesnt have content dispositons, probablr the same for png i guess?
+            # 'https://musescore.com/static/musescore/scoredata/gen/2/2/1/
+            # 6248122/ff4b96202e32a0a90206fb5fa856031468e402fc/score_0.svg'
+            return self.url.split('/')[-1]
 
-def get_file_extension(name):
-	# score_0.svg
-	return name[-4:].replace('.','') # 4 last characters get their `.` removed
 
-print('Parsing!')
-response = requests.get(user_input)
-soup = BeautifulSoup(response.text, 'html.parser')
+class DownloadFile:
+    def __init__(self, info_list):
+        # [name, page_count, midi, mxl, mp3, img]
+        self.name = info_list[0]
+        self.page_count = info_list[1]
 
-# <script> are usually at the end, they include the link informations, score information, and comments
-target_group_too_vague_and_painful = soup.find_all('script')
+        self.img_first_file = info_list[-1]  # this is just one file
+        self.img_file = []
+        self.normal_file_url = info_list[2:5]
+        self.img_file_url = list(self.img_url())  # this is multiple files
 
-for i in target_group_too_vague_and_painful:
-	try:
-		if 'MusicComposition' in re.findall(regex_page_type, str(i)): # the <script> we want is the score information, that part contains that string right there
-										# the others dont
-			target = str(i)
-	except:
-		pass
+        self.start_dl()
 
-# there are two cases for the img_url, the first one is the svg file. the second one could also find the svg file if it's obvious. at the same time, it could find the png file
-# therefore, if the first one confirm that there is an svg file then oll korrect. if there isn't, it is sure to have png for all the imgs, which is really bad to look at
-try:
-	first_img_url = soup.find('link', {'type':'image/svg+xml'})['href'].split('?no-cache')[0]
-	if len(first_img_url) == 0 or first_img_url == 'https://musescore.com/static/public/img/product_icons/musescore/favicon.svg': raise Exception
-except:
-	first_img_url = re.findall(regex_img_link, target)[0].replace('\\/', '/').split('?no-cache')[0]
-	
-# i hate how i name this `name_`
-name_ = re.findall(regex_name_, target)[0]
-print(name_)
+    def dl_file(self, file_url):
+        file_class = Parser(file_url)
+        file_name = file_class.file_name
+        open(file_name, 'wb+').write(file_class.file_content)
 
-# this one look at a different body so all of the info here is groupped different from the other
-target = str(soup.find_all('div', {'class': 'js-store'})).replace('&quot;', '"')
-page_number = int(re.findall(regex_pages_count, target)[0])
-midi_link = re.findall(regex_midi_file, target)[0].split('?revision=')[0]
-mp3_link = re.findall(regex_mp3_file, target)[0].split('?revision=')[0]
+        return file_name  # we can be verbose with this return
 
-#download all pages
-print('Downloading images!')
-raw_img_list = []
-for i in range(0,page_number): # despite counting 10, the starting index is 0 for their website, so there are only 9, but the range() got it all
-	print(f'{i+1} out of {page_number}', end='\r', flush=True)
-	directory = download_files(replace_number_for_page(first_img_url, i), name_) # replace_...() will raise the img number in the url
-	raw_img_list.append(fr'{directory}')
+    def img_nbr_changer(self, num):
+        split_1 = self.img_first_file.split('/score_')
+        split_2 = split_1[1].split('.')
+        # split2[0] is the number
+        split_2[0] = str(num)
+        split_1[1] = '.'.join(split_2)
+        return '/score_'.join(split_1)
 
-print('Converting to PDF!', end='\n', flush=False)
-# here are the two cases, i have to use different libraries cuz I cant figure hwo to use one for all. anyway, the svg is tricky so many differnt libraries is needed
-if get_file_extension(raw_img_list[0]) == 'png':
-	# despite having the thumbnail as '.png', for some reasons, many pro users have '.svg' file as preload
-	with open(f"{name_}.pdf","wb") as f:
-		f.write(img2pdf.convert(raw_img_list))
+    def img_url(self):
+        for i in range(0, self.page_count):  # start from 10 pages have score_9 max cuz index matters
+            yield self.img_nbr_changer(i)
 
-if get_file_extension(raw_img_list[0]) == 'svg':
-	pdf_list = []
-	for index, svg in enumerate(raw_img_list):
-		print(f'{index+1} out of {page_number}', end='\r', flush=True)
-		pdf_name = f'output{index}.pdf'
-		pdf_list.append(pdf_name)
-	
-		drawing = svg2rlg(svg)
-		renderPDF.drawToFile(drawing, pdf_name)
-	
-	print('Merging!', end='\n', flush=True)
-	merger = PdfFileMerger()
-	
-	for pdf in pdf_list:
-		merger.append(pdf)
-	
-	merger.write(f'{name_}.pdf')
-	merger.close()
+    def start_dl(self):
+        for i in self.normal_file_url:
+            print(self.dl_file(i))
 
-# the clean up part will download the midi and mp3 file then remove all of the imgs that are downloaded in the downloading part cuz they neede to stay in the disk to be  converted
-# there is another way to make it more efficient is accessing directly from the memory but I've not got there yet. hate all of those pointers
-print('Cleaning up!', flush=False)
-download_files(midi_link, name_)
-download_files(mp3_link, name_)
-try: # order matters here cuz if it's png then there is no pdf_list. try/except is needed to avoid this but it coudl also be avoided either way
-	for i in raw_img_list:
-		os.remove(i)
-	for i in pdf_list:
-		os.remove(i)
-except:
-	pass
+        print('Downloading images!')
+        for index, i in enumerate(self.img_file_url):
+            print(f'{index + 1} out of {self.page_count}', end='\r', flush=True)
+            self.img_file.append(self.dl_file(i))
 
-print('\nDone!', flush=False)
 
+class Merger:
+    def __init__(self, img_list, page_count, name):
+        self.img_list = img_list
+        self.img_ext = self.get_file_ext()
+        self.svg_pdf_list = []
+        self.page_count = page_count
+        self.name = name
+
+        self.start_pdf()
+
+    def get_file_ext(self):
+        return self.img_list[0].split('.')[1]
+
+    def svg_to_pdf(self):
+        for index, svg in enumerate(self.img_list):
+            print(f'{index + 1} out of {self.page_count}', end='\r', flush=True)
+
+            pdf_name = f'output{index}.pdf'
+            self.svg_pdf_list.append(pdf_name)
+
+            drawing = svg2rlg(svg)
+            renderPDF.drawToFile(drawing, pdf_name)
+
+        merger = PdfFileMerger()
+
+        for pdf in self.svg_pdf_list:
+            merger.append(pdf)
+
+        merger.write(f'{self.name}.pdf')
+        merger.close()
+
+    def png_to_pdf(self):
+        with open(f"{self.name}.pdf", "wb") as f:
+            f.write(img2pdf.convert(self.img_list))
+
+    def clean_up(self):
+        for dead_1 in self.img_list:
+            os.remove(dead_1)
+
+        for dead_2 in self.svg_pdf_list:
+            os.remove(dead_2)
+
+    def start_pdf(self):
+        if self.img_ext == 'png':
+            self.png_to_pdf()
+
+        if self.img_ext == 'svg':
+            self.svg_to_pdf()
+
+        print('Cleaning up!')
+        self.clean_up()
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument(action='store', dest='link', nargs='*')
+    args = parser.parse_args()
+
+    musescore_url = args.link
+    if not musescore_url:
+        musescore_url = input("Musescore link: ")
+
+    print('Parsing!')
+    info_list = Parser(musescore_url).score_info
+
+    print('Downloading!')
+    dl_class = DownloadFile(info_list)
+    img_list = dl_class.img_file
+    name = dl_class.name
+    page_count = dl_class.page_count
+
+    print('\nMerging!')
+    Merger(img_list, page_count, name)
+
+
+if __name__ == "__main__":
+    main()
