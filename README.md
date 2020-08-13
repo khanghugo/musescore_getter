@@ -3,6 +3,8 @@ download pdf, mp3, midi for free because that is what shown to you. Some users a
 
 `getter.py url` to download all the files
 
+if you want to download more files, refer to [this](https://github.com/Xmader/musescore-downloader/blob/master/src/scoreinfo.ts) full web version by Xmader. the MSCZ requires token, which is I am not familiar with yet.
+
 you also need these libraries
 
 pip install svglib
