@@ -1,4 +1,5 @@
-# musescore_getter
+# musescore_getter (broken as of 2021/05/07 because the patched some part, I am working on a fix)
+
 download pdf, mp3, midi for free because that is what shown to you. Some users are not pro so their thumbnails are low quality PNG. But some do have SVG.
 
 `getter.py url` to download all the files
