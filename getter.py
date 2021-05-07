@@ -180,12 +180,14 @@ class Merger:
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument(action='store', dest='link', nargs='*')
+    parser.add_argument(action='store', dest='link')
     args = parser.parse_args()
 
-    musescore_url = args.link
-    if not musescore_url:
+    musescore_url = str()
+    if not args.link:
         musescore_url = input("Musescore link: ")
+    else:
+        musescore_url = args.link
 
     print('Parsing!')
     info_list = Parser(musescore_url).score_info
